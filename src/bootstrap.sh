@@ -51,8 +51,9 @@ if [ ! -d "venv" ]; then
     # Activate venv
     source "${WORKSPACE}/venv/bin/activate"
 
-    # Upgrade pip
+    # Upgrade pip and install essential packages
     pip install --upgrade pip
+    pip install huggingface_hub
 
     # Install PyTorch with CUDA 12.8 support first
     echo "Installing PyTorch with CUDA 12.8 support..."
