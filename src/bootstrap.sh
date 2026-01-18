@@ -18,14 +18,9 @@ cd "${WORKSPACE}"
 echo "Changed to: $(pwd)"
 
 # Setup environment variables
-export HF_HOME="${HF_HOME:-${WORKSPACE}/cache}"
-export HUGGINGFACE_HUB_CACHE="${HUGGINGFACE_HUB_CACHE:-${WORKSPACE}/cache}"
+# NOTE: Do NOT override HF_HOME - let RunPod use its default cache location
+# RunPod caches models at the platform level, overriding breaks that caching
 export WORKSPACE="${WORKSPACE}"
-
-# Create necessary directories only if they don't exist
-if [ ! -d "${HF_HOME}" ]; then
-    mkdir -p "${HF_HOME}"
-fi
 
 if [ ! -d "${WORKSPACE}/output_images" ]; then
     mkdir -p "${WORKSPACE}/output_images"
@@ -84,11 +79,17 @@ if [ ! -d "venv" ]; then
 
     cd "${WORKSPACE}"
 
-    # Create src directory if it doesn't exist and copy handler
+    # Create src directory if it doesn't exist and copy handler + model
     if [ ! -d "${WORKSPACE}/src" ]; then
         mkdir -p "${WORKSPACE}/src"
     fi
     cp /workspace/DA3-Serverless/src/handler.py "${WORKSPACE}/src/"
+
+    # Copy model directory for SDTHead support
+    if [ -d "/workspace/DA3-Serverless/src/model" ]; then
+        echo "Copying SDTHead model module..."
+        cp -r /workspace/DA3-Serverless/src/model "${WORKSPACE}/src/"
+    fi
 
 else
     echo "Virtual environment already exists, skipping installation"
@@ -97,48 +98,30 @@ else
     source "${WORKSPACE}/venv/bin/activate"
 fi
 
-# 5) Check if models have been downloaded, if not download models
+# 5) Download model if needed (RunPod handles caching at platform level)
 DEFAULT_MODEL="depth-anything/DA3NESTED-GIANT-LARGE"
-echo "Checking if model is downloaded: ${DEFAULT_MODEL}"
+echo "Ensuring model is available: ${DEFAULT_MODEL}"
 
-# Function to check if model is downloaded
-check_model_downloaded() {
-    local model_id="$1"
-    local cache_dir="${HF_HOME}/hub/${model_id/--/---}"
-    if [ -d "$cache_dir" ] && [ "$(ls -A "$cache_dir" 2>/dev/null)" ]; then
-        return 0
-    else
-        return 1
-    fi
-}
+# Set HF_TOKEN if available
+if [ -n "${HF_TOKEN:-}" ]; then
+    export HF_TOKEN="$HF_TOKEN"
+    echo "Using HuggingFace token for authentication"
+fi
 
-if ! check_model_downloaded "$DEFAULT_MODEL"; then
-    echo "Model not found, downloading..."
-
-    # Set HF_TOKEN if available
-    if [ -n "${HF_TOKEN:-}" ]; then
-        export HF_TOKEN="$HF_TOKEN"
-        echo "Using HuggingFace token for authentication"
-    fi
-
-    # Download model
-    python -c "
+# Download model using huggingface_hub (uses default HF cache, cached by RunPod)
+python -c "
 import os
 from huggingface_hub import snapshot_download
 
-model_id = os.environ.get('DEFAULT_MODEL')
-print(f'Downloading {model_id}...')
+model_id = '${DEFAULT_MODEL}'
+print(f'Checking/downloading {model_id}...')
 snapshot_download(
     repo_id=model_id,
-    cache_dir=os.environ['HF_HOME'],
     token=os.environ.get('HF_TOKEN'),
     resume_download=True
 )
-print('Download complete!')
+print('Model ready!')
 "
-else
-    echo "Model already downloaded"
-fi
 
 # 6) Start the API endpoint
 echo "Starting DA3-Serverless handler..."

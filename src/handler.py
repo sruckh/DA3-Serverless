@@ -32,6 +32,14 @@ except ImportError:
     # Fallback if not installed yet
     DepthAnything3 = None
 
+# Import SDTHead utilities (optional - graceful fallback if not available)
+try:
+    from model.da3_sdt import swap_head_to_sdt
+    SDT_AVAILABLE = True
+except ImportError:
+    swap_head_to_sdt = None
+    SDT_AVAILABLE = False
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -40,8 +48,13 @@ MODEL_ID_DEFAULT = "da3nested-giant-large"
 OUTPUT_DIR = WORKSPACE / "output_images"
 MAX_PIXELS = 4096 * 4096
 
+# SDTHead configuration
+USE_SDT_HEAD_DEFAULT = os.environ.get("USE_SDT_HEAD", "false").lower() == "true"
+SDT_FUSION_CHANNELS = int(os.environ.get("SDT_FUSION_CHANNELS", "256"))
+
 _model = None
 _device = None
+_model_config = None  # Tracks (model_id, use_sdt_head) for cache invalidation
 
 def ensure_model_downloaded(model_id):
     """Ensure model is downloaded, download if necessary"""
@@ -51,13 +64,13 @@ def ensure_model_downloaded(model_id):
 
     try:
         from huggingface_hub import snapshot_download
-        hf_home = os.environ.get("HF_HOME", f"{WORKSPACE}/cache")
         hf_token = os.environ.get("HF_TOKEN")
 
         logger.info(f"Checking model availability: {model_id}")
+        # NOTE: Do not set cache_dir - let huggingface_hub use default
+        # RunPod caches models at the platform level using the default HF cache
         snapshot_download(
             repo_id=model_id,
-            cache_dir=hf_home,
             token=hf_token,
             resume_download=True
         )
@@ -65,27 +78,41 @@ def ensure_model_downloaded(model_id):
     except Exception as e:
         logger.warning(f"Could not verify model download: {e}")
 
-def load_model(model_id=None):
-    """Load DA3 model"""
-    global _model, _device
+def load_model(model_id=None, use_sdt_head=None):
+    """
+    Load DA3 model with optional SDTHead.
 
-    # Clear cached model if different model_id is requested
-    if _model is not None and model_id and model_id != getattr(load_model, '_last_model_id', None):
-        logger.info("Different model requested, clearing cache")
+    Args:
+        model_id: Model identifier (default: MODEL_ID_DEFAULT)
+        use_sdt_head: Whether to use SDTHead instead of DPT (default: USE_SDT_HEAD_DEFAULT)
+
+    Returns:
+        Tuple of (model, device)
+    """
+    global _model, _device, _model_config
+
+    model_id = model_id or MODEL_ID_DEFAULT
+    if use_sdt_head is None:
+        use_sdt_head = USE_SDT_HEAD_DEFAULT
+
+    current_config = (model_id, use_sdt_head)
+
+    # Clear cached model if configuration changed
+    if _model is not None and _model_config != current_config:
+        logger.info(f"Model configuration changed from {_model_config} to {current_config}, clearing cache")
         _model = None
         _device = None
 
     if _model is not None:
         return _model, _device
 
-    model_id = model_id or MODEL_ID_DEFAULT
     _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     try:
         if DepthAnything3 is None:
             raise ImportError("DepthAnything3 not available")
 
-        logger.info(f"Loading DA3 model: {model_id}")
+        logger.info(f"Loading DA3 model: {model_id} (use_sdt_head={use_sdt_head})")
 
         # Ensure model is downloaded for HuggingFace models
         ensure_model_downloaded(model_id)
@@ -97,12 +124,26 @@ def load_model(model_id=None):
         else:
             _model = DepthAnything3(model_name=model_id)
         _model = _model.to(device=_device)
+
+        # Swap head to SDTHead if requested
+        if use_sdt_head:
+            if not SDT_AVAILABLE:
+                raise ImportError("SDTHead not available. Ensure model package is properly installed.")
+            logger.info(f"Swapping head to SDTHead (fusion_channels={SDT_FUSION_CHANNELS})")
+            _model = swap_head_to_sdt(
+                _model,
+                output_dim=2,  # depth + confidence
+                fusion_channels=SDT_FUSION_CHANNELS,
+                use_sky_head=True,
+            )
+
         _model.eval()
 
-        # Cache the model_id for future checks
-        load_model._last_model_id = model_id
+        # Cache the configuration
+        _model_config = current_config
 
-        logger.info(f"DA3 model loaded successfully on {_device}")
+        head_type = "SDTHead" if use_sdt_head else "DPT"
+        logger.info(f"DA3 model loaded successfully on {_device} with {head_type} head")
         return _model, _device
 
     except Exception as e:
@@ -188,9 +229,10 @@ def run_inference(job):
     # Load image
     img = load_image_from_job(job_input)
 
-    # Load model
+    # Load model with optional SDTHead
     model_id = job_input.get("model_id", MODEL_ID_DEFAULT)
-    model, device = load_model(model_id)
+    use_sdt_head = job_input.get("use_sdt_head", None)  # None = use default from env
+    model, device = load_model(model_id, use_sdt_head=use_sdt_head)
 
     # Convert image for DA3
     # DA3 expects file paths or numpy arrays
@@ -254,11 +296,15 @@ def handler(job):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--warmup", action="store_true")
+    parser.add_argument("--use-sdt-head", action="store_true", help="Use SDTHead instead of DPT")
     args, _ = parser.parse_known_args()
 
     if args.warmup:
         try:
-            load_model()
+            # Use SDTHead from CLI arg or environment variable
+            use_sdt = args.use_sdt_head or USE_SDT_HEAD_DEFAULT
+            logger.info(f"Warming up model (use_sdt_head={use_sdt}, SDT_AVAILABLE={SDT_AVAILABLE})")
+            load_model(use_sdt_head=use_sdt)
         except Exception as e:
             logger.error(f"Warmup failed: {e}")
         sys.exit(0)

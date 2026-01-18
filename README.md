@@ -16,10 +16,11 @@ DA3 Serverless packages the Depth Anything 3 model into a production-ready Docke
 - **Format Support**: JPEG, PNG, WebP, BMP, TIFF, GIF, ICO, and more
 - **GPU Acceleration**: CUDA 12.8.1 support with PyTorch 2.8.0
 - **Model Variants**: Support for multiple DA3 model architectures (Small, Large, Giant, Nested-Giant)
+- **SDTHead Support**: Optional Stable Depth Transformer head with DySample upsampling for enhanced detail preservation
 - **Auto-Conversion**: Handles various image modes (RGBA, L, P, etc.) with automatic RGB conversion
 - **Metric Depth**: Returns accurate depth measurements in meters
 - **Secure**: API key authentication via headers or input fields
-- **Persistent Storage**: Optional volume mounting for model caching and output persistence
+- **RunPod Model Caching**: Uses RunPod's platform-level model caching for fast cold starts
 
 ## 🏗️ Architecture
 
@@ -110,6 +111,7 @@ HF_TOKEN="your-hf-token" \
 
     // Optional: Inference parameters
     use_ray_pose?: boolean;  // Use ray-based pose estimation (default: false)
+    use_sdt_head?: boolean;  // Use SDTHead instead of DPT (default: false or USE_SDT_HEAD env)
   }
 }
 ```
@@ -140,9 +142,12 @@ HF_TOKEN="your-hf-token" \
 |----------|-------------|---------|
 | `DA3_API_KEY` | Required authentication key for API access | *none* |
 | `HF_TOKEN` | HuggingFace token for private models | *none* |
-| `HF_HOME` | HuggingFace cache directory | `/workspace/DA3/cache` |
 | `MODEL_ID` | Default DA3 model to load | `da3nested-giant-large` |
+| `USE_SDT_HEAD` | Use SDTHead instead of DPT head | `false` |
+| `SDT_FUSION_CHANNELS` | SDTHead fusion channel dimension | `256` |
 | `WORKSPACE` | Workspace root directory | `/workspace/DA3` |
+
+> **Note**: HuggingFace cache location is managed by RunPod at the platform level. Do not override `HF_HOME` as this will break RunPod's model caching.
 
 ### Model Variants
 
@@ -154,19 +159,51 @@ HF_TOKEN="your-hf-token" \
 | `da3nested-giant-large` | State-of-the-art metric depth | ~16GB | ⚡ | ★★★★★ |
 | `da3metric-large` | Metric-optimized variant | ~10GB | ⚡⚡ | ★★★★ |
 
+### SDTHead (Stable Depth Transformer Head)
+
+SDTHead is an alternative decoder head adapted from [AnythingDepth](https://github.com/AnythingDepth/AnythingDepth) that can replace the default DPT head. It offers:
+
+- **DySample Upsampling**: Dynamic content-aware upsampling instead of bilinear interpolation
+- **Weighted Multi-Scale Fusion**: Learnable importance weights for feature fusion
+- **Spatial Detail Enhancement**: Depthwise convolution for better edge preservation
+
+**When to use SDTHead:**
+- When you need better fine detail preservation
+- For scenes with complex edges and textures
+- When experimenting with alternative architectures
+
+**Enable via environment variable:**
+```bash
+USE_SDT_HEAD=true
+```
+
+**Enable via API parameter:**
+```json
+{
+  "input": {
+    "image_url": "...",
+    "use_sdt_head": true
+  }
+}
+```
+
+> **Note**: SDTHead weights are randomly initialized when swapping from a pre-trained DPT model. For best results, the head should be fine-tuned on depth datasets (not included in this release).
+
 ### Directory Structure (Runtime)
 
 ```
-<WORKSPACE>/          # /workspace/DA3 or /runpod-volume/DA3-Serverless
+<WORKSPACE>/          # /workspace/DA3
 ├── venv/            # Python virtual environment with dependencies
-├── src/             # Handler and bootstrap scripts
+├── src/             # Handler and scripts
 │   ├── handler.py   # Main RunPod serverless handler
-│   ├── bootstrap.sh # Container initialization script
-│   └── prefetch.sh  # Model pre-downloading utility
-├── cache/           # HuggingFace model cache (HF_HOME)
-├── models/          # Manual model snapshots (optional)
-├── upstream/        # DA3 source code (cloned at build time)
-└── output_images/   # Generated depth maps (auto-pruned after 14 days)
+│   └── model/       # SDTHead module (optional)
+│       ├── sdt_head.py          # SDTHead implementation
+│       ├── sdt_head_adapter.py  # DA3 interface adapter
+│       └── da3_sdt.py           # Head swapping utilities
+├── upstream/        # DA3 source code (cloned at runtime)
+└── output_images/   # Generated depth maps
+
+# HuggingFace models cached by RunPod at platform level (default HF_HOME)
 ```
 
 ## 🧪 Testing
@@ -174,13 +211,17 @@ HF_TOKEN="your-hf-token" \
 ### Test Model Warmup
 
 ```bash
-# From within the container
+# Warmup with default DPT head
 python src/handler.py --warmup
+
+# Warmup with SDTHead
+python src/handler.py --warmup --use-sdt-head
 ```
 
 ### Test API Call
 
 ```bash
+# Standard request with DPT head
 curl -X POST https://your-runpod-endpoint/runsync \
   -H "Content-Type: application/json" \
   -H "da3-api-key: YOUR_KEY" \
@@ -188,6 +229,17 @@ curl -X POST https://your-runpod-endpoint/runsync \
     "input": {
       "image_url": "https://example.com/sample.jpg",
       "model_id": "da3nested-giant-large"
+    }
+  }'
+
+# Request with SDTHead enabled
+curl -X POST https://your-runpod-endpoint/runsync \
+  -H "Content-Type: application/json" \
+  -H "da3-api-key: YOUR_KEY" \
+  -d '{
+    "input": {
+      "image_url": "https://example.com/sample.jpg",
+      "use_sdt_head": true
     }
   }'
 ```
