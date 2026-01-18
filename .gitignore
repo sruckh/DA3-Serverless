@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environment
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Cache
+.cache/
+cache/
+output_images/
+*.pkl
+
+# Model artifacts
+*.pth
+*.pt
+*.safetensors
+
+# Environment
+.env
+.env.local
+
+# External code (for reference only, not part of project)
+ext_code/
+
+# Local project configuration
+.serena/

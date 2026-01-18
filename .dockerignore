@@ -1,0 +1,11 @@
+.git
+.github
+.gitignore
+README.md
+*.md
+output_images/
+cache/
+venv/
+.env*
+__pycache__/
+*.pyc
