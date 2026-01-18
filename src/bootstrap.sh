@@ -1,25 +1,34 @@
 #!/bin/bash
 set -euo pipefail
 
-# Define workspace directory
-WORKSPACE="/workspace/DA3"
-
 echo "Starting DA3-Serverless bootstrap..."
-echo "Workspace: ${WORKSPACE}"
 
-# 1) Check if /workspace/DA3 exists, if not create it
+# Define workspace directory - use network volume if available for persistence
+if [ -d "/runpod-volume" ]; then
+    WORKSPACE="/runpod-volume/workspace/DA3"
+    export HF_HOME="/runpod-volume/huggingface"
+    echo "Using network volume: ${WORKSPACE}"
+else
+    WORKSPACE="/workspace/DA3"
+    echo "Using ephemeral storage: ${WORKSPACE}"
+fi
+
+# Create workspace if needed
 if [ ! -d "${WORKSPACE}" ]; then
     echo "Creating workspace directory..."
     mkdir -p "${WORKSPACE}"
 fi
 
-# 2) Switch to the directory
+# Create HF_HOME if set
+if [ -n "${HF_HOME:-}" ]; then
+    mkdir -p "${HF_HOME}"
+    echo "HuggingFace cache: ${HF_HOME}"
+fi
+
+# Switch to workspace
 cd "${WORKSPACE}"
 echo "Changed to: $(pwd)"
 
-# Setup environment variables
-# NOTE: Do NOT override HF_HOME - let RunPod use its default cache location
-# RunPod caches models at the platform level, overriding breaks that caching
 export WORKSPACE="${WORKSPACE}"
 
 if [ ! -d "${WORKSPACE}/output_images" ]; then
