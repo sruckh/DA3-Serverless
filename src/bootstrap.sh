@@ -89,23 +89,23 @@ if [ ! -d "venv" ]; then
 
     cd "${WORKSPACE}"
 
-    # Create src directory if it doesn't exist and copy handler + model
-    if [ ! -d "${WORKSPACE}/src" ]; then
-        mkdir -p "${WORKSPACE}/src"
-    fi
-    cp /workspace/DA3-Serverless/src/handler.py "${WORKSPACE}/src/"
-
-    # Copy model directory for SDTHead support
-    if [ -d "/workspace/DA3-Serverless/src/model" ]; then
-        echo "Copying SDTHead model module..."
-        cp -r /workspace/DA3-Serverless/src/model "${WORKSPACE}/src/"
-    fi
-
 else
     echo "Virtual environment already exists, skipping installation"
 
     # Activate venv
     source "${WORKSPACE}/venv/bin/activate"
+fi
+
+# Copy handler and model files (always, to pick up updates)
+if [ ! -d "${WORKSPACE}/src" ]; then
+    mkdir -p "${WORKSPACE}/src"
+fi
+cp /workspace/DA3-Serverless/src/handler.py "${WORKSPACE}/src/"
+
+# Copy model directory for SDTHead support
+if [ -d "/workspace/DA3-Serverless/src/model" ]; then
+    echo "Copying SDTHead model module..."
+    cp -r /workspace/DA3-Serverless/src/model "${WORKSPACE}/src/"
 fi
 
 # Ensure huggingface_hub is installed (needed for model download)
