@@ -108,8 +108,8 @@ if [ -d "/workspace/DA3-Serverless/src/model" ]; then
     cp -r /workspace/DA3-Serverless/src/model "${WORKSPACE}/src/"
 fi
 
-# Ensure huggingface_hub is installed (needed for model download)
-pip install --quiet huggingface_hub
+# Ensure required packages are installed
+pip install --quiet huggingface_hub runpod
 
 # 5) Download model if needed
 DEFAULT_MODEL="depth-anything/DA3NESTED-GIANT-LARGE"
