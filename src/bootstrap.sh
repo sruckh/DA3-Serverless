@@ -108,7 +108,10 @@ else
     source "${WORKSPACE}/venv/bin/activate"
 fi
 
-# 5) Download model if needed (RunPod handles caching at platform level)
+# Ensure huggingface_hub is installed (needed for model download)
+pip install --quiet huggingface_hub
+
+# 5) Download model if needed
 DEFAULT_MODEL="depth-anything/DA3NESTED-GIANT-LARGE"
 echo "Ensuring model is available: ${DEFAULT_MODEL}"
 
