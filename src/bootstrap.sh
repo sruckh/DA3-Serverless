@@ -25,7 +25,6 @@ mkdir -p "${WORKSPACE}" "${HF_HOME}"
 LOG_FILE="${WORKSPACE}/bootstrap_debug.log"
 echo "Enabling persistent logging to: ${LOG_FILE}"
 # Redirect stdout and stderr to the log file while still showing in console
-# stdbuf -oL -eL helps reduce buffering if available, otherwise standard redirection
 exec > >(tee -a "${LOG_FILE}") 2>&1
 echo "=== Bootstrap started at $(date) ==="
 sync
@@ -74,30 +73,35 @@ if [ ! -d "venv" ]; then
     pip install huggingface_hub
     sync
 
+    # Define constraints to prevent torch upgrades/downgrades
+    # Based on logs showing 2.9.1 is preferred by dependencies
+    echo "Creating constraints.txt to pin PyTorch versions..."
+    cat > "${WORKSPACE}/constraints.txt" <<EOF
+torch==2.9.1
+torchvision==0.24.1
+torchaudio==2.9.1
+EOF
+
     # Install PyTorch with CUDA 12.8 support
-    # Split installation to avoid OOM kills during unpacking
-    echo "Installing PyTorch (torch only)..."
-    pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cu128
+    echo "Installing PyTorch 2.9.1 with CUDA 12.8 support..."
+    pip install torch==2.9.1 torchvision==0.24.1 torchaudio==2.9.1 --index-url https://download.pytorch.org/whl/cu128
     sync
     
-    echo "Installing torchvision and torchaudio..."
-    pip install torchvision==0.23.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128
-    sync
-
-    # Check if DA3 has requirements and filter out torch/torchvision to avoid conflicts
+    # Check if DA3 has requirements and filter out problematic packages
     if [ -f "${WORKSPACE}/upstream/requirements.txt" ]; then
         echo "Found DA3 requirements.txt, filtering out torch/torchvision/xformers/triton to avoid conflicts"
-        # Filter out torch-related packages and xformers/triton which cause conflicts
+        # Filter out torch-related packages and xformers/triton
         grep -vE "^(torch|torchvision|torchaudio|xformers|triton)" "${WORKSPACE}/upstream/requirements.txt" > "${WORKSPACE}/requirements_filtered.txt" || true
         
-        # Install filtered requirements
-        # Use extra-index-url so pip can see the torch packages we just installed
-        echo "Installing filtered requirements..."
-        pip install -r "${WORKSPACE}/requirements_filtered.txt" --extra-index-url https://download.pytorch.org/whl/cu128
+        # Install filtered requirements with constraints
+        echo "Installing filtered requirements with constraints..."
+        pip install -r "${WORKSPACE}/requirements_filtered.txt" \
+            --extra-index-url https://download.pytorch.org/whl/cu128 \
+            -c "${WORKSPACE}/constraints.txt"
         sync
     fi
 
-    # Install DA3 from local source with --no-deps to avoid torch conflicts
+    # Install DA3 from local source with --no-deps
     echo "Installing Depth Anything 3..."
     cd "${WORKSPACE}/upstream"
     pip install -e . --no-deps
@@ -109,9 +113,9 @@ if [ ! -d "venv" ]; then
     pip install --no-build-isolation --no-deps git+https://github.com/nerfstudio-project/gsplat.git@0b4dddf04cb687367602c01196913cde6a743d70
     sync
 
-    # Reinstall PyTorch to fix any corruption from dependency conflicts
-    echo "Reinstalling PyTorch to ensure clean installation..."
-    pip install --force-reinstall torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128
+    # Final check of torch version
+    echo "Current PyTorch version:"
+    python -c "import torch; print(torch.__version__)"
     sync
 
     # Mark installation as complete
@@ -127,13 +131,12 @@ else
     source "${WORKSPACE}/venv/bin/activate"
 fi
 
-# Copy handler and model files (always, to pick up updates)
+# Copy handler and model files (always)
 if [ ! -d "${WORKSPACE}/src" ]; then
     mkdir -p "${WORKSPACE}/src"
 fi
 cp /workspace/DA3-Serverless/src/handler.py "${WORKSPACE}/src/"
 
-# Copy model directory for SDTHead support
 if [ -d "/workspace/DA3-Serverless/src/model" ]; then
     echo "Copying SDTHead model module..."
     cp -r /workspace/DA3-Serverless/src/model "${WORKSPACE}/src/"
@@ -146,13 +149,11 @@ pip install --quiet huggingface_hub runpod
 DEFAULT_MODEL="depth-anything/DA3NESTED-GIANT-LARGE"
 echo "Ensuring model is available: ${DEFAULT_MODEL}"
 
-# Set HF_TOKEN if available
 if [ -n "${HF_TOKEN:-}" ]; then
     export HF_TOKEN="$HF_TOKEN"
     echo "Using HuggingFace token for authentication"
 fi
 
-# Download model using huggingface_hub (uses default HF cache, cached by RunPod)
 python -c "
 import os
 from huggingface_hub import snapshot_download
