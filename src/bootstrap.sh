@@ -73,13 +73,15 @@ if [ ! -d "venv" ]; then
     pip install huggingface_hub
     sync
 
-    # Define constraints to prevent torch upgrades/downgrades
-    # Based on logs showing 2.9.1 is preferred by dependencies
-    echo "Creating constraints.txt to pin PyTorch versions..."
+    # Define constraints to prevent torch upgrades/downgrades and numpy/pillow churn
+    # Based on logs showing 2.9.1 is preferred by dependencies and numpy 2.3.5 is pre-installed
+    echo "Creating constraints.txt to pin versions..."
     cat > "${WORKSPACE}/constraints.txt" <<EOF
 torch==2.9.1
 torchvision==0.24.1
 torchaudio==2.9.1
+numpy==2.3.5
+pillow==12.0.0
 EOF
 
     # Install PyTorch with CUDA 12.8 support
@@ -89,9 +91,10 @@ EOF
     
     # Check if DA3 has requirements and filter out problematic packages
     if [ -f "${WORKSPACE}/upstream/requirements.txt" ]; then
-        echo "Found DA3 requirements.txt, filtering out torch/torchvision/xformers/triton to avoid conflicts"
-        # Filter out torch-related packages and xformers/triton
-        grep -vE "^(torch|torchvision|torchaudio|xformers|triton)" "${WORKSPACE}/upstream/requirements.txt" > "${WORKSPACE}/requirements_filtered.txt" || true
+        echo "Found DA3 requirements.txt, filtering out torch/torchvision/xformers/triton/numpy/pillow to avoid conflicts"
+        # Robustly filter out torch-related packages, xformers/triton, and numpy/pillow.
+        # Catches 'numpy<2', 'numpy', 'pillow', 'pillow>=...', etc.
+        grep -vE "^[[:space:]]*(torch|torchvision|torchaudio|xformers|triton|numpy|pillow)" "${WORKSPACE}/upstream/requirements.txt" > "${WORKSPACE}/requirements_filtered.txt" || true
         
         # Install filtered requirements with constraints
         echo "Installing filtered requirements with constraints..."
