@@ -19,6 +19,21 @@ echo "HuggingFace cache: ${HF_HOME}"
 # Create directories
 mkdir -p "${WORKSPACE}" "${HF_HOME}"
 
+# Setup logging to persistent storage
+LOG_FILE="${WORKSPACE}/bootstrap_debug.log"
+echo "Enabling persistent logging to: ${LOG_FILE}"
+# Redirect stdout and stderr to the log file while still showing in console
+exec > >(tee -a "${LOG_FILE}") 2>&1
+echo "=== Bootstrap started at $(date) ==="
+
+# Trap errors to log them
+error_handler() {
+    echo "ERROR: Bootstrap failed at line $1"
+    echo "Last command: $BASH_COMMAND"
+    echo "See ${LOG_FILE} for details."
+}
+trap 'error_handler ${LINENO}' ERR
+
 # Switch to workspace
 cd "${WORKSPACE}"
 export WORKSPACE="${WORKSPACE}"
@@ -35,7 +50,12 @@ else
     echo "DA3 repository already exists, skipping clone"
 fi
 
-# 4) Check if venv exists, if not create and install dependencies
+# 4) Check if venv exists and is complete
+if [ -d "venv" ] && [ ! -f "venv/.install_complete" ]; then
+    echo "Found incomplete virtual environment (missing .install_complete marker). Removing to ensure clean install..."
+    rm -rf "venv"
+fi
+
 if [ ! -d "venv" ]; then
     echo "Creating Python virtual environment..."
     /usr/bin/python3.12 -m venv "${WORKSPACE}/venv"
@@ -74,10 +94,13 @@ if [ ! -d "venv" ]; then
     echo "Reinstalling PyTorch to ensure clean installation..."
     pip install --force-reinstall torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128
 
+    # Mark installation as complete
+    touch "${WORKSPACE}/venv/.install_complete"
+    
     cd "${WORKSPACE}"
 
 else
-    echo "Virtual environment already exists, skipping installation"
+    echo "Virtual environment already exists and is complete, skipping installation"
 
     # Activate venv
     source "${WORKSPACE}/venv/bin/activate"
