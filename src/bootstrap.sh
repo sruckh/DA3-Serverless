@@ -3,32 +3,24 @@ set -euo pipefail
 
 echo "Starting DA3-Serverless bootstrap..."
 
-# Define workspace directory - use network volume if available for persistence
-if [ -d "/runpod-volume" ]; then
-    WORKSPACE="/runpod-volume/workspace/DA3"
-    export HF_HOME="/runpod-volume/huggingface"
-    echo "Using network volume: ${WORKSPACE}"
-else
+# Use WORKSPACE from environment if set, otherwise default to /workspace/DA3
+# RunPod typically mounts network volume at /workspace
+if [ -z "${WORKSPACE:-}" ]; then
     WORKSPACE="/workspace/DA3"
-    echo "Using ephemeral storage: ${WORKSPACE}"
 fi
+echo "Workspace: ${WORKSPACE}"
 
-# Create workspace if needed
-if [ ! -d "${WORKSPACE}" ]; then
-    echo "Creating workspace directory..."
-    mkdir -p "${WORKSPACE}"
+# Set HF_HOME under workspace if not already set
+if [ -z "${HF_HOME:-}" ]; then
+    export HF_HOME="${WORKSPACE}/huggingface"
 fi
+echo "HuggingFace cache: ${HF_HOME}"
 
-# Create HF_HOME if set
-if [ -n "${HF_HOME:-}" ]; then
-    mkdir -p "${HF_HOME}"
-    echo "HuggingFace cache: ${HF_HOME}"
-fi
+# Create directories
+mkdir -p "${WORKSPACE}" "${HF_HOME}"
 
 # Switch to workspace
 cd "${WORKSPACE}"
-echo "Changed to: $(pwd)"
-
 export WORKSPACE="${WORKSPACE}"
 
 if [ ! -d "${WORKSPACE}/output_images" ]; then
@@ -69,23 +61,18 @@ if [ ! -d "venv" ]; then
         pip install -r "${WORKSPACE}/requirements_final.txt"
     fi
 
-    # Install DA3 from local source (without torch/torchvision in requirements)
+    # Install DA3 from local source with --no-deps to avoid torch conflicts
     echo "Installing Depth Anything 3..."
     cd "${WORKSPACE}/upstream"
-    # Create a temporary requirements file without torch for the install
-    if [ -f "requirements.txt" ]; then
-        # Temporarily move requirements.txt to avoid torch conflicts
-        mv requirements.txt requirements.txt.backup
-        pip install -e .
-        # Restore requirements.txt
-        mv requirements.txt.backup requirements.txt
-    else
-        pip install -e .
-    fi
+    pip install -e . --no-deps
 
     # Install gsplat for 3D Gaussian head
     echo "Installing gsplat..."
     pip install --no-build-isolation git+https://github.com/nerfstudio-project/gsplat.git@0b4dddf04cb687367602c01196913cde6a743d70
+
+    # Reinstall PyTorch to fix any corruption from dependency conflicts
+    echo "Reinstalling PyTorch to ensure clean installation..."
+    pip install --force-reinstall torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128
 
     cd "${WORKSPACE}"
 
