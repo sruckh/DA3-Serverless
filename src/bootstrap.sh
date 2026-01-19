@@ -1,5 +1,6 @@
 #!/bin/bash
 set -euo pipefail
+export PYTHONUNBUFFERED=1
 
 echo "Starting DA3-Serverless bootstrap..."
 
@@ -23,14 +24,17 @@ mkdir -p "${WORKSPACE}" "${HF_HOME}"
 LOG_FILE="${WORKSPACE}/bootstrap_debug.log"
 echo "Enabling persistent logging to: ${LOG_FILE}"
 # Redirect stdout and stderr to the log file while still showing in console
+# stdbuf -oL -eL helps reduce buffering if available, otherwise standard redirection
 exec > >(tee -a "${LOG_FILE}") 2>&1
 echo "=== Bootstrap started at $(date) ==="
+sync
 
 # Trap errors to log them
 error_handler() {
     echo "ERROR: Bootstrap failed at line $1"
     echo "Last command: $BASH_COMMAND"
     echo "See ${LOG_FILE} for details."
+    sync
 }
 trap 'error_handler ${LINENO}' ERR
 
@@ -59,17 +63,25 @@ fi
 if [ ! -d "venv" ]; then
     echo "Creating Python virtual environment..."
     /usr/bin/python3.12 -m venv "${WORKSPACE}/venv"
+    sync
 
     # Activate venv
     source "${WORKSPACE}/venv/bin/activate"
 
     # Upgrade pip and install essential packages
-    pip install --upgrade pip
-    pip install huggingface_hub
+    pip install --upgrade pip --no-cache-dir
+    pip install huggingface_hub --no-cache-dir
+    sync
 
-    # Install PyTorch with CUDA 12.8 support first
-    echo "Installing PyTorch with CUDA 12.8 support..."
-    pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128
+    # Install PyTorch with CUDA 12.8 support
+    # Split installation to avoid OOM kills during unpacking
+    echo "Installing PyTorch (torch only)..."
+    pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cu128 --no-cache-dir
+    sync
+    
+    echo "Installing torchvision and torchaudio..."
+    pip install torchvision==0.23.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128 --no-cache-dir
+    sync
 
     # Check if DA3 has requirements and filter out torch/torchvision to avoid conflicts
     if [ -f "${WORKSPACE}/upstream/requirements.txt" ]; then
@@ -78,24 +90,29 @@ if [ ! -d "venv" ]; then
         grep -v "^torch" "${WORKSPACE}/upstream/requirements.txt" > "${WORKSPACE}/requirements_filtered.txt" || true
         grep -v "^torchvision" "${WORKSPACE}/requirements_filtered.txt" > "${WORKSPACE}/requirements_final.txt" || true
         # Install filtered requirements first
-        pip install -r "${WORKSPACE}/requirements_final.txt"
+        pip install -r "${WORKSPACE}/requirements_final.txt" --no-cache-dir
+        sync
     fi
 
     # Install DA3 from local source with --no-deps to avoid torch conflicts
     echo "Installing Depth Anything 3..."
     cd "${WORKSPACE}/upstream"
-    pip install -e . --no-deps
+    pip install -e . --no-deps --no-cache-dir
+    sync
 
     # Install gsplat for 3D Gaussian head
     echo "Installing gsplat..."
-    pip install --no-build-isolation git+https://github.com/nerfstudio-project/gsplat.git@0b4dddf04cb687367602c01196913cde6a743d70
+    pip install --no-build-isolation git+https://github.com/nerfstudio-project/gsplat.git@0b4dddf04cb687367602c01196913cde6a743d70 --no-cache-dir
+    sync
 
     # Reinstall PyTorch to fix any corruption from dependency conflicts
     echo "Reinstalling PyTorch to ensure clean installation..."
-    pip install --force-reinstall torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128
+    pip install --force-reinstall torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128 --no-cache-dir
+    sync
 
     # Mark installation as complete
     touch "${WORKSPACE}/venv/.install_complete"
+    sync
     
     cd "${WORKSPACE}"
 
@@ -119,7 +136,7 @@ if [ -d "/workspace/DA3-Serverless/src/model" ]; then
 fi
 
 # Ensure required packages are installed
-pip install --quiet huggingface_hub runpod
+pip install --quiet huggingface_hub runpod --no-cache-dir
 
 # 5) Download model if needed
 DEFAULT_MODEL="depth-anything/DA3NESTED-GIANT-LARGE"
