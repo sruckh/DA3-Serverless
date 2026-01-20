@@ -93,15 +93,19 @@ EOF
     if [ -f "${WORKSPACE}/upstream/requirements.txt" ]; then
         echo "Found DA3 requirements.txt, filtering out torch/torchvision/xformers/triton/numpy/pillow to avoid conflicts"
         # Robustly filter out torch-related packages, xformers/triton, and numpy/pillow.
-        # Catches 'numpy<2', 'numpy', 'pillow', 'pillow>=...', etc.
         grep -vE "^[[:space:]]*(torch|torchvision|torchaudio|xformers|triton|numpy|pillow)" "${WORKSPACE}/upstream/requirements.txt" > "${WORKSPACE}/requirements_filtered.txt" || true
         
-        # Install filtered requirements with constraints
-        echo "Installing filtered requirements with constraints..."
-        pip install -r "${WORKSPACE}/requirements_filtered.txt" \
-            --extra-index-url https://download.pytorch.org/whl/cu128 \
-            -c "${WORKSPACE}/constraints.txt"
-        sync
+        # Install filtered requirements ONE BY ONE to avoid OOM
+        echo "Installing filtered requirements individually to prevent OOM..."
+        while read -r line || [ -n "$line" ]; do
+            # Skip empty lines and comments
+            [[ -z "$line" || "$line" =~ ^# ]] && continue
+            echo "Installing: $line"
+            pip install "$line" \
+                --extra-index-url https://download.pytorch.org/whl/cu128 \
+                -c "${WORKSPACE}/constraints.txt"
+            sync
+        done < "${WORKSPACE}/requirements_filtered.txt"
     fi
 
     # Install DA3 from local source with --no-deps
