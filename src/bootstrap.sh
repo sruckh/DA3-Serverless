@@ -38,6 +38,13 @@ error_handler() {
 }
 trap 'error_handler ${LINENO}' ERR
 
+# Install system dependencies for OpenCV/Open3D if possible
+if command -v apt-get &> /dev/null; then
+    echo "Installing system dependencies for OpenCV/Open3D..."
+    # Update and install libs, continue on error (e.g. if no root)
+    apt-get update && apt-get install -y libgl1 libglib2.0-0 || echo "System install failed or skipped."
+fi
+
 # Switch to workspace
 cd "${WORKSPACE}"
 export WORKSPACE="${WORKSPACE}"
@@ -54,21 +61,23 @@ else
     echo "DA3 repository already exists, skipping clone"
 fi
 
-# 4) Check if venv exists and is complete
-if [ -d "venv" ] && [ ! -f "venv/.install_complete" ]; then
-    echo "Found incomplete virtual environment (missing .install_complete marker). Removing to ensure clean install..."
-    rm -rf "venv"
-fi
-
+# 4) Check for venv, create if missing, resume if incomplete
 if [ ! -d "venv" ]; then
     echo "Creating Python virtual environment..."
     /usr/bin/python3.12 -m venv "${WORKSPACE}/venv"
     sync
+else
+    echo "Virtual environment exists. Checking status..."
+fi
 
-    # Activate venv
-    source "${WORKSPACE}/venv/bin/activate"
+# Always activate venv to ensure we are in the right context for install/resume
+source "${WORKSPACE}/venv/bin/activate"
 
-    # Upgrade pip and install essential packages
+# If installation is not marked complete, run/resume the installation process
+if [ ! -f "venv/.install_complete" ]; then
+    echo "Installation incomplete (missing .install_complete). Starting/Resuming installation..."
+
+    # Upgrade pip and install essential packages (idempotent)
     pip install --upgrade pip
     pip install huggingface_hub
     sync
@@ -84,8 +93,8 @@ numpy==2.3.5
 pillow==12.0.0
 EOF
 
-    # Install PyTorch with CUDA 12.8 support
-    echo "Installing PyTorch 2.9.1 with CUDA 12.8 support..."
+    # Install PyTorch with CUDA 12.8 support (idempotent)
+    echo "Ensuring PyTorch 2.9.1 with CUDA 12.8 support..."
     pip install torch==2.9.1 torchvision==0.24.1 torchaudio==2.9.1 --index-url https://download.pytorch.org/whl/cu128
     sync
     
@@ -95,15 +104,35 @@ EOF
         # Robustly filter out torch-related packages, xformers/triton, and numpy/pillow.
         grep -vE "^[[:space:]]*(torch|torchvision|torchaudio|xformers|triton|numpy|pillow)" "${WORKSPACE}/upstream/requirements.txt" > "${WORKSPACE}/requirements_filtered.txt" || true
         
-        # Install filtered requirements ONE BY ONE to avoid OOM
+        # Install filtered requirements ONE BY ONE to avoid OOM (idempotent)
         echo "Installing filtered requirements individually to prevent OOM..."
         while read -r line || [ -n "$line" ]; do
+            # Trim whitespace
+            line=$(echo "$line" | xargs)
+            
             # Skip empty lines and comments
             [[ -z "$line" || "$line" =~ ^# ]] && continue
+            
+            echo "------------------------------------------------"
             echo "Installing: $line"
+            echo "Disk Usage:"
+            df -h "${WORKSPACE}" || true
+            
+            # Special handling for moviepy to prevent OOM
+            if [[ "$line" =~ moviepy ]]; then
+                echo "Detected moviepy. Pre-installing imageio_ffmpeg..."
+                pip install imageio_ffmpeg --no-deps -c "${WORKSPACE}/constraints.txt" || true
+                rm -rf ~/.cache/pip
+                sync
+            fi
+
             pip install "$line" \
                 --extra-index-url https://download.pytorch.org/whl/cu128 \
-                -c "${WORKSPACE}/constraints.txt"
+                -c "${WORKSPACE}/constraints.txt" \
+                --no-cache-dir
+            
+            # Aggressively clear pip cache to free up space/memory
+            rm -rf ~/.cache/pip
             sync
         done < "${WORKSPACE}/requirements_filtered.txt"
     fi
@@ -127,14 +156,14 @@ EOF
 
     # Mark installation as complete
     touch "${WORKSPACE}/venv/.install_complete"
+    echo "Installation marked complete!"
     sync
     
     cd "${WORKSPACE}"
 
 else
     echo "Virtual environment already exists and is complete, skipping installation"
-
-    # Activate venv
+    # Ensure venv is activated even in the skipped case (redundant but safe)
     source "${WORKSPACE}/venv/bin/activate"
 fi
 
