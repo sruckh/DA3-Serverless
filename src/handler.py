@@ -44,9 +44,19 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 API_KEY_ENV = "DA3_API_KEY"
-MODEL_ID_DEFAULT = "da3nested-giant-large"
+# Default to MODEL_ID env var if set, otherwise giant nested large
+MODEL_ID_DEFAULT = os.environ.get("MODEL_ID", "da3nested-giant-large")
 OUTPUT_DIR = WORKSPACE / "output_images"
 MAX_PIXELS = 4096 * 4096
+
+# Map short names to HuggingFace Repo IDs to ensure weights are loaded
+MODEL_MAP = {
+    "da3nested-giant-large": "depth-anything/DA3NESTED-GIANT-LARGE",
+    "da3-giant": "depth-anything/DA3-Giant",
+    "da3-large": "depth-anything/DA3-Large",
+    "da3-small": "depth-anything/DA3-Small",
+    "da3metric-large": "depth-anything/DA3METRIC-Large",
+}
 
 # SDTHead configuration
 USE_SDT_HEAD_DEFAULT = os.environ.get("USE_SDT_HEAD", "false").lower() == "true"
@@ -95,6 +105,12 @@ def load_model(model_id=None, use_sdt_head=None):
     if use_sdt_head is None:
         use_sdt_head = USE_SDT_HEAD_DEFAULT
 
+    # Resolve short name to HF repo ID if possible
+    # This ensures we use from_pretrained() and actually load weights!
+    if model_id in MODEL_MAP:
+        logger.info(f"Mapping short name '{model_id}' to HuggingFace repo '{MODEL_MAP[model_id]}'")
+        model_id = MODEL_MAP[model_id]
+
     current_config = (model_id, use_sdt_head)
 
     # Clear cached model if configuration changed
@@ -121,10 +137,11 @@ def load_model(model_id=None, use_sdt_head=None):
         ensure_model_downloaded(model_id)
 
         # DA3 uses model_name instead of from_pretrained for local models
-        # For HuggingFace models, use the full path
+        # For HuggingFace models, use the full path to call from_pretrained
         if model_id.startswith("depth-anything/"):
             _model = DepthAnything3.from_pretrained(model_id)
         else:
+            logger.warning(f"Loading model '{model_id}' without weights (random init) because it's not a known HF path.")
             _model = DepthAnything3(model_name=model_id)
         _model = _model.to(device=_device)
 
