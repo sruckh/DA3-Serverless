@@ -14,12 +14,13 @@ DA3 Serverless packages the Depth Anything 3 model into a production-ready Docke
 - **Production-Ready API**: RunPod serverless endpoint with synchronous execution (`/runsync`)
 - **Multiple Input Formats**: Accepts images via URL or base64 (including data URI format)
 - **Format Support**: JPEG, PNG, WebP, BMP, TIFF, GIF, ICO, and more
-- **GPU Acceleration**: CUDA 12.8.1 support with PyTorch 2.8.0
+- **GPU Acceleration**: CUDA 12.8.1 support with PyTorch 2.9.1
 - **Model Variants**: Support for multiple DA3 model architectures (Small, Large, Giant, Nested-Giant)
-- **SDTHead Support**: Optional Stable Depth Transformer head with DySample upsampling for enhanced detail preservation
+- **SDTHead Support**: Optional Stable Depth Transformer head with DySample upsampling (Experimental)
 - **Auto-Conversion**: Handles various image modes (RGBA, L, P, etc.) with automatic RGB conversion
 - **Metric Depth**: Returns accurate depth measurements in meters
-- **Secure**: API key authentication via headers or input fields
+- **Enhanced Visualization**: Robust percentile-based normalization (2nd-98th) for high-contrast output
+- **Flexible Auth**: Optional API key authentication (open by default if env var unset)
 - **RunPod Model Caching**: Uses RunPod's platform-level model caching for fast cold starts
 
 ## 🏗️ Architecture
@@ -56,14 +57,16 @@ docker build -t da3-serverless .
 ### Running the Container
 
 ```bash
-# Run with GPU support (recommended for production)
+# Run with GPU support (open access)
+docker run --gpus all -p 8080:8080 da3-serverless
+
+# Run with API key authentication
 docker run --gpus all -p 8080:8080 \
   -e DA3_API_KEY="your-secret-api-key" \
   da3-serverless
 
 # Run with persistent volume for model caching
 docker run --gpus all -p 8080:8080 \
-  -e DA3_API_KEY="your-secret-api-key" \
   -v /runpod-volume:/runpod-volume \
   da3-serverless
 ```
@@ -88,7 +91,7 @@ HF_TOKEN="your-hf-token" \
 
 #### Endpoint: `/runsync` (Synchronous)
 
-**Authentication**: Provide API key via header or input field
+**Authentication**: Optional. Only required if `DA3_API_KEY` environment variable is set.
 - Header: `da3-api-key` or `DA3-API-KEY`
 - Input field: `input.api_key`
 
@@ -97,8 +100,8 @@ HF_TOKEN="your-hf-token" \
 ```typescript
 {
   input: {
-    // Required: API authentication key
-    api_key: string;
+    // Optional: API authentication key (if DA3_API_KEY env var is set)
+    api_key?: string;
 
     // Required: Image source (one of)
     image_url?: string;      // Public URL to image
@@ -111,7 +114,7 @@ HF_TOKEN="your-hf-token" \
 
     // Optional: Inference parameters
     use_ray_pose?: boolean;  // Use ray-based pose estimation (default: false)
-    use_sdt_head?: boolean;  // Use SDTHead instead of DPT (default: false or USE_SDT_HEAD env)
+    use_sdt_head?: boolean;  // Use SDTHead instead of DPT (default: false)
   }
 }
 ```
@@ -121,13 +124,15 @@ HF_TOKEN="your-hf-token" \
 ```typescript
 {
   // Grayscale PNG as base64 (8-bit, 0-255)
+  // Normalized using 2nd/98th percentiles for optimal contrast
   image_base64: string;
 
   // Depth statistics in meters
   min_depth: number;        // Minimum depth value
   max_depth: number;        // Maximum depth value
 
-  // File path (when using persistent volume)
+  // Metadata
+  head_type: string;        // Active decoder head (e.g., "DPT", "SDTHeadAdapter")
   file_path: string;        // Path to saved PNG on volume
 
   // Error responses
@@ -140,7 +145,7 @@ HF_TOKEN="your-hf-token" \
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `DA3_API_KEY` | Required authentication key for API access | *none* |
+| `DA3_API_KEY` | Optional authentication key. If unset, API is open. | *none* |
 | `HF_TOKEN` | HuggingFace token for private models | *none* |
 | `MODEL_ID` | Default DA3 model to load | `da3nested-giant-large` |
 | `USE_SDT_HEAD` | Use SDTHead instead of DPT head | `false` |
@@ -161,16 +166,9 @@ HF_TOKEN="your-hf-token" \
 
 ### SDTHead (Stable Depth Transformer Head)
 
-SDTHead is an alternative decoder head adapted from [AnythingDepth](https://github.com/AnythingDepth/AnythingDepth) that can replace the default DPT head. It offers:
+SDTHead is an alternative decoder head adapted from [AnythingDepth](https://github.com/AnythingDepth/AnythingDepth).
 
-- **DySample Upsampling**: Dynamic content-aware upsampling instead of bilinear interpolation
-- **Weighted Multi-Scale Fusion**: Learnable importance weights for feature fusion
-- **Spatial Detail Enhancement**: Depthwise convolution for better edge preservation
-
-**When to use SDTHead:**
-- When you need better fine detail preservation
-- For scenes with complex edges and textures
-- When experimenting with alternative architectures
+**Current Status:** Experimental. Pre-trained weights for the SDTHead are not currently available in the public repository. Enabling this (`use_sdt_head=true`) will use a randomly initialized decoder, resulting in poor output. This feature is integrated for future use when weights become available.
 
 **Enable via environment variable:**
 ```bash
@@ -186,8 +184,6 @@ USE_SDT_HEAD=true
   }
 }
 ```
-
-> **Note**: SDTHead weights are randomly initialized when swapping from a pre-trained DPT model. For best results, the head should be fine-tuned on depth datasets (not included in this release).
 
 ### Directory Structure (Runtime)
 
@@ -221,10 +217,9 @@ python src/handler.py --warmup --use-sdt-head
 ### Test API Call
 
 ```bash
-# Standard request with DPT head
+# Standard request (No API Key needed if env var not set)
 curl -X POST https://your-runpod-endpoint/runsync \
   -H "Content-Type: application/json" \
-  -H "da3-api-key: YOUR_KEY" \
   -d '{
     "input": {
       "image_url": "https://example.com/sample.jpg",
@@ -232,14 +227,13 @@ curl -X POST https://your-runpod-endpoint/runsync \
     }
   }'
 
-# Request with SDTHead enabled
+# Request with API Key (if configured)
 curl -X POST https://your-runpod-endpoint/runsync \
   -H "Content-Type: application/json" \
   -H "da3-api-key: YOUR_KEY" \
   -d '{
     "input": {
-      "image_url": "https://example.com/sample.jpg",
-      "use_sdt_head": true
+      "image_url": "https://example.com/sample.jpg"
     }
   }'
 ```
@@ -253,7 +247,6 @@ IMAGE_BASE64=$(base64 -w 0 sample.jpg)
 # Make request
 curl -X POST https://your-runpod-endpoint/runsync \
   -H "Content-Type: application/json" \
-  -H "da3-api-key: YOUR_KEY" \
   -d "{
     \"input\": {
       \"image_base64\": \"${IMAGE_BASE64}\",
@@ -272,7 +265,7 @@ python3.12 -m venv venv
 source venv/bin/activate
 
 # Install PyTorch with CUDA support
-pip install torch==2.8.0 torchvision==0.23.0 \
+pip install torch==2.9.1 torchvision==0.24.1 \
   --index-url https://download.pytorch.org/whl/cu128
 
 # Install dependencies
@@ -308,15 +301,15 @@ docker push yourname/da3-serverless:v1.0.0
 ![Data Flow Diagram](./docs/diagrams/data-flow.svg)
 
 1. **Request Reception**: RunPod receives HTTP POST to `/runsync`
-2. **Authentication**: API key validated from header or input field
+2. **Authentication**: Optional API key validation
 3. **Image Loading**: Image loaded from URL (HTTP GET) or decoded from base64
 4. **Format Validation**: Image format validated and converted to RGB if needed
 5. **Resolution Check**: Image size verified (max 4096×4096)
 6. **Model Loading**: DA3 model loaded (cached between requests)
 7. **Inference**: Depth prediction run on GPU
-8. **Output Processing**: Depth map normalized to 8-bit grayscale
+8. **Output Processing**: Depth map normalized (percentile clipping) to 8-bit grayscale
 9. **Encoding**: PNG encoded to base64
-10. **Response**: JSON returned with depth statistics and image data
+10. **Response**: JSON returned with depth statistics, head info, and image data
 
 ## 🤝 Contributing
 
@@ -349,7 +342,7 @@ Contributions are welcome! Please follow these guidelines:
 - **Solution**: Resize input image to max 4096×4096 pixels before sending
 
 **Issue**: "Unauthorized" error
-- **Solution**: Ensure `DA3_API_KEY` is set and matches the provided API key
+- **Solution**: Check if `DA3_API_KEY` is set in environment. If so, provide it in headers or input.
 
 ## 📄 License
 
