@@ -265,6 +265,7 @@ def run_inference(job):
 
     # Load image
     img = load_image_from_job(job_input)
+    original_size = img.size  # (Width, Height)
 
     # Load model with optional SDTHead
     model_id = job_input.get("model_id", MODEL_ID_DEFAULT)
@@ -288,6 +289,11 @@ def run_inference(job):
 
     # Prepare inference parameters
     inference_kwargs = {}
+    
+    # Allow user to control processing resolution (default 504)
+    # Higher values = more detail, slower
+    if "processing_res" in job_input:
+        inference_kwargs["process_res"] = int(job_input["processing_res"])
 
     # Add optional parameters if provided
     if "use_ray_pose" in job_input:
@@ -303,13 +309,25 @@ def run_inference(job):
     # Extract depth map - DA3 returns depth as [N, H, W] numpy array
     depth = prediction.depth[0]  # First image
     
-    # Robust normalization using percentiles to ignore outliers (e.g. sky)
-    depth_min = float(np.percentile(depth, 2))
-    depth_max = float(np.percentile(depth, 98))
+    # 1. Resize back to original resolution
+    # Convert to PIL for high-quality resizing
+    depth_pil = Image.fromarray(depth)
+    depth_pil = depth_pil.resize(original_size, resample=Image.BICUBIC)
+    depth = np.array(depth_pil)
+
+    # 2. Use Inverse Depth for better visualization contrast
+    # Metric depth is linear (0..100m), which makes near objects look dark/flat.
+    # Inverse depth (1/d) emphasizes near structure.
+    inv_depth = 1.0 / (depth + 1e-6)
+    
+    # Robust normalization using percentiles on INVERSE depth
+    # Ignore top 2% (closest/noise) and bottom 2% (sky/far)
+    viz_min = float(np.percentile(inv_depth, 2))
+    viz_max = float(np.percentile(inv_depth, 98))
     
     # Clip and normalize
-    depth_clipped = np.clip(depth, depth_min, depth_max)
-    norm_depth = (depth_clipped - depth_min) / (depth_max - depth_min + 1e-8)
+    inv_depth_clipped = np.clip(inv_depth, viz_min, viz_max)
+    norm_depth = (inv_depth_clipped - viz_min) / (viz_max - viz_min + 1e-8)
     
     # Create 8-bit grayscale PNG
     png = Image.fromarray((norm_depth * 255).astype(np.uint8), mode="L")
@@ -325,9 +343,13 @@ def run_inference(job):
     png.save(buf, format="PNG")
     b64 = base64.b64encode(buf.getvalue()).decode("ascii")
 
+    # Get raw min/max from original metric depth for stats
+    depth_min = float(depth.min())
+    depth_max = float(depth.max())
+
     logger.info(
-        "job=%s saved=%s head=%s min_depth=%.3f max_depth=%.3f",
-        job_id, png_path, head_type, depth_min, depth_max
+        "job=%s saved=%s head=%s res=%s depth_range=%.2fm-%.2fm",
+        job_id, png_path, head_type, original_size, depth_min, depth_max
     )
 
     return {
