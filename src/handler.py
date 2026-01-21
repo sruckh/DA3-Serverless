@@ -260,10 +260,16 @@ def run_inference(job):
 
     # Extract depth map - DA3 returns depth as [N, H, W] numpy array
     depth = prediction.depth[0]  # First image
-    depth_min, depth_max = float(depth.min()), float(depth.max())
-
-    # Normalize for visualization (0-255)
-    norm_depth = (depth - depth_min) / (depth_max - depth_min + 1e-8)
+    
+    # Robust normalization using percentiles to ignore outliers (e.g. sky)
+    depth_min = float(np.percentile(depth, 2))
+    depth_max = float(np.percentile(depth, 98))
+    
+    # Clip and normalize
+    depth_clipped = np.clip(depth, depth_min, depth_max)
+    norm_depth = (depth_clipped - depth_min) / (depth_max - depth_min + 1e-8)
+    
+    # Create 8-bit grayscale PNG
     png = Image.fromarray((norm_depth * 255).astype(np.uint8), mode="L")
 
     # Save image
