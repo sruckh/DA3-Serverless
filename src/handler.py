@@ -100,8 +100,11 @@ def load_model(model_id=None, use_sdt_head=None):
     # Clear cached model if configuration changed
     if _model is not None and _model_config != current_config:
         logger.info(f"Model configuration changed from {_model_config} to {current_config}, clearing cache")
+        del _model
         _model = None
         _device = None
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     if _model is not None:
         return _model, _device
@@ -142,8 +145,19 @@ def load_model(model_id=None, use_sdt_head=None):
         # Cache the configuration
         _model_config = current_config
 
-        head_type = "SDTHead" if use_sdt_head else "DPT"
-        logger.info(f"DA3 model loaded successfully on {_device} with {head_type} head")
+        # Identify head type for logging
+        if hasattr(_model, 'model'):
+            inner_net = _model.model
+            if hasattr(inner_net, 'da3'):
+                head_obj = inner_net.da3.head
+            else:
+                head_obj = getattr(inner_net, 'head', None)
+        else:
+            head_obj = getattr(_model, 'head', None)
+            
+        head_type = type(head_obj).__name__ if head_obj else "Unknown"
+        logger.info(f"DA3 model loaded successfully on {_device}. Active head: {head_type}")
+        
         return _model, _device
 
     except Exception as e:
@@ -240,6 +254,17 @@ def run_inference(job):
     use_sdt_head = job_input.get("use_sdt_head", None)  # None = use default from env
     model, device = load_model(model_id, use_sdt_head=use_sdt_head)
 
+    # Identify active head for response
+    if hasattr(model, 'model'):
+        inner_net = model.model
+        if hasattr(inner_net, 'da3'):
+            head_obj = inner_net.da3.head
+        else:
+            head_obj = getattr(inner_net, 'head', None)
+    else:
+        head_obj = getattr(model, 'head', None)
+    head_type = type(head_obj).__name__ if head_obj else "Unknown"
+
     # Convert image for DA3
     # DA3 expects file paths or numpy arrays
     images = [np.array(img)]
@@ -284,14 +309,15 @@ def run_inference(job):
     b64 = base64.b64encode(buf.getvalue()).decode("ascii")
 
     logger.info(
-        "job=%s saved=%s min_depth=%.3f max_depth=%.3f",
-        job_id, png_path, depth_min, depth_max
+        "job=%s saved=%s head=%s min_depth=%.3f max_depth=%.3f",
+        job_id, png_path, head_type, depth_min, depth_max
     )
 
     return {
         "image_base64": b64,
         "min_depth": depth_min,
         "max_depth": depth_max,
+        "head_type": head_type,
         "file_path": str(png_path)
     }
 
