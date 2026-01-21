@@ -49,7 +49,7 @@ OUTPUT_DIR = WORKSPACE / "output_images"
 MAX_PIXELS = 4096 * 4096
 
 # SDTHead configuration
-USE_SDT_HEAD_DEFAULT = os.environ.get("USE_SDT_HEAD", "false").lower() == "true"
+USE_SDT_HEAD_DEFAULT = os.environ.get("USE_SDT_HEAD", "true").lower() == "true"
 SDT_FUSION_CHANNELS = int(os.environ.get("SDT_FUSION_CHANNELS", "256"))
 
 _model = None
