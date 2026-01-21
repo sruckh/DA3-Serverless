@@ -111,7 +111,7 @@ def swap_head_to_sdt(
     while preserving the backbone and other components.
 
     Args:
-        model: DA3 model (DepthAnything3 or DepthAnything3Net)
+        model: DA3 model (DepthAnything3, DepthAnything3Net, or NestedDepthAnything3Net)
         dim_in: Input dimension (auto-detected if None)
         output_dim: Number of output channels
         activation: Activation for depth output
@@ -123,13 +123,25 @@ def swap_head_to_sdt(
     Returns:
         Model with SDTHead (same object, modified in-place)
     """
-    # Get the actual network (DepthAnything3 wraps DepthAnything3Net)
+    # Get the actual network (DepthAnything3 wraps the net in .model)
     if hasattr(model, 'model'):
         net = model.model
         model_name = getattr(model, 'model_name', 'da3-large')
     else:
         net = model
         model_name = 'da3-large'
+
+    # Handle NestedDepthAnything3Net (it has two branches: .da3 and .da3_metric)
+    # We swap the head of the main .da3 branch
+    if hasattr(net, 'da3'):
+        logger.info("Detected NestedDepthAnything3Net, swapping head of the .da3 branch")
+        target_net = net.da3
+    else:
+        target_net = net
+
+    # Ensure the target has a head
+    if not hasattr(target_net, 'head'):
+        raise AttributeError(f"Model structure unknown: {type(target_net).__name__} has no attribute 'head'")
 
     # Auto-detect dimension from backbone if not provided
     if dim_in is None:
@@ -148,12 +160,12 @@ def swap_head_to_sdt(
     )
 
     # Move to same device as original head
-    device = next(net.head.parameters()).device
+    device = next(target_net.head.parameters()).device
     sdt_head = sdt_head.to(device)
 
     # Swap the head
-    old_head_type = type(net.head).__name__
-    net.head = sdt_head
+    old_head_type = type(target_net.head).__name__
+    target_net.head = sdt_head
 
     logger.info(f"Swapped head from {old_head_type} to SDTHeadAdapter")
 
