@@ -152,14 +152,20 @@ def load_model(model_id=None, use_sdt_head=None):
 
 def check_api_key(job):
     """Validate API key"""
+    expected = os.environ.get(API_KEY_ENV)
+    
+    # If no app-level key is configured, assume platform auth (RunPod) is sufficient
+    if not expected:
+        return
+
     supplied = None
     headers = job.get("http", {}).get("headers") if job.get("http") else None
     if headers:
         supplied = headers.get("da3-api-key") or headers.get("DA3-API-KEY")
     if not supplied:
         supplied = job.get("input", {}).get("api_key")
-    expected = os.environ.get(API_KEY_ENV)
-    if not expected or supplied != expected:
+    
+    if supplied != expected:
         raise PermissionError("Unauthorized")
 
 def load_image_from_job(job_input):
