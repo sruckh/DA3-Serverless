@@ -19,7 +19,7 @@ DA3 Serverless packages the Depth Anything 3 model into a production-ready Docke
 - **SDTHead Support**: Optional Stable Depth Transformer head with DySample upsampling (Experimental)
 - **Auto-Conversion**: Handles various image modes (RGBA, L, P, etc.) with automatic RGB conversion
 - **Metric Depth**: Returns accurate depth measurements in meters
-- **Enhanced Visualization**: Robust percentile-based normalization (2nd-98th) for high-contrast output
+- **Enhanced Visualization**: Histogram equalization with configurable percentile clipping and gamma correction for optimal tonal range
 - **Flexible Auth**: Optional API key authentication (open by default if env var unset)
 - **RunPod Model Caching**: Uses RunPod's platform-level model caching for fast cold starts
 
@@ -115,6 +115,13 @@ HF_TOKEN="your-hf-token" \
     // Optional: Inference parameters
     use_ray_pose?: boolean;  // Use ray-based pose estimation (default: false)
     use_sdt_head?: boolean;  // Use SDTHead instead of DPT (default: false)
+
+    // Optional: Depth map visualization parameters
+    histogram_equalization?: boolean;  // Apply histogram equalization (default: true)
+    hist_clip_limit?: number;          // Contrast limiting for hist eq, 0-0.03 (default: 0.01)
+    clip_percentile_low?: number;      // Lower percentile for clipping (default: 0.5)
+    clip_percentile_high?: number;     // Upper percentile for clipping (default: 99.5)
+    gamma?: number;                    // Gamma correction, <1 brightens midtones (default: 1.0)
   }
 }
 ```
@@ -124,7 +131,7 @@ HF_TOKEN="your-hf-token" \
 ```typescript
 {
   // Grayscale PNG as base64 (8-bit, 0-255)
-  // Normalized using 2nd/98th percentiles for optimal contrast
+  // Histogram-equalized with percentile clipping for optimal tonal range
   image_base64: string;
 
   // Depth statistics in meters
@@ -307,7 +314,7 @@ docker push yourname/da3-serverless:v1.0.0
 5. **Resolution Check**: Image size verified (max 4096×4096)
 6. **Model Loading**: DA3 model loaded (cached between requests)
 7. **Inference**: Depth prediction run on GPU
-8. **Output Processing**: Depth map normalized (percentile clipping) to 8-bit grayscale
+8. **Output Processing**: Depth map normalized (histogram equalization + percentile clipping + gamma) to 8-bit grayscale
 9. **Encoding**: PNG encoded to base64
 10. **Response**: JSON returned with depth statistics, head info, and image data
 

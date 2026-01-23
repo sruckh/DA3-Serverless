@@ -257,6 +257,57 @@ def load_image_from_job(job_input):
 
     return img
 
+
+def apply_histogram_equalization(img_array, clip_limit=0.0):
+    """Apply histogram equalization to improve tonal distribution.
+    
+    Args:
+        img_array: 2D numpy array with values in [0, 1] range
+        clip_limit: If > 0, applies contrast limiting (similar to CLAHE).
+                   Values typically 0.01-0.03. 0 = standard histogram eq.
+    
+    Returns:
+        Equalized array with values in [0, 1] range
+    """
+    # Convert to 8-bit for histogram computation
+    img_8bit = (img_array * 255).astype(np.uint8)
+    
+    # Compute histogram
+    hist, bins = np.histogram(img_8bit.flatten(), bins=256, range=(0, 256))
+    
+    # Apply contrast limiting if specified
+    if clip_limit > 0:
+        clip_threshold = clip_limit * img_8bit.size / 256
+        excess = np.sum(np.maximum(hist - clip_threshold, 0))
+        hist = np.minimum(hist, clip_threshold)
+        # Redistribute excess uniformly
+        hist += excess / 256
+    
+    # Compute CDF
+    cdf = hist.cumsum()
+    
+    # Normalize CDF to [0, 255]
+    cdf_min = cdf[cdf > 0].min() if np.any(cdf > 0) else 0
+    cdf_normalized = (cdf - cdf_min) / (cdf[-1] - cdf_min + 1e-8) * 255
+    
+    # Map original values through equalized CDF
+    equalized = cdf_normalized[img_8bit].astype(np.float32) / 255.0
+    
+    return equalized
+
+
+def apply_gamma_correction(img_array, gamma):
+    """Apply gamma correction to expand or compress tonal range.
+    
+    Args:
+        img_array: 2D numpy array with values in [0, 1] range
+        gamma: Gamma value. < 1 brightens midtones, > 1 darkens midtones.
+    
+    Returns:
+        Gamma-corrected array with values in [0, 1] range
+    """
+    return np.power(img_array, gamma)
+
 def run_inference(job):
     """Run DA3 inference"""
     check_api_key(job)
@@ -315,19 +366,40 @@ def run_inference(job):
     depth_pil = depth_pil.resize(original_size, resample=Image.BICUBIC)
     depth = np.array(depth_pil)
 
+    # === DEPTH MAP NORMALIZATION PIPELINE ===
+    # Configurable parameters for tonal range optimization
+    
+    # Percentile clipping bounds (wider defaults for better tonal range)
+    clip_low = float(job_input.get("clip_percentile_low", 0.5))
+    clip_high = float(job_input.get("clip_percentile_high", 99.5))
+    
+    # Gamma correction (< 1 brightens midtones, > 1 darkens)
+    gamma = float(job_input.get("gamma", 1.0))
+    
+    # Histogram equalization (improves tonal distribution)
+    use_hist_eq = job_input.get("histogram_equalization", True)
+    hist_clip_limit = float(job_input.get("hist_clip_limit", 0.01))
+    
     # 2. Use Inverse Depth for better visualization contrast
     # Metric depth is linear (0..100m), which makes near objects look dark/flat.
     # Inverse depth (1/d) emphasizes near structure.
     inv_depth = 1.0 / (depth + 1e-6)
     
-    # Robust normalization using percentiles on INVERSE depth
-    # Ignore top 2% (closest/noise) and bottom 2% (sky/far)
-    viz_min = float(np.percentile(inv_depth, 2))
-    viz_max = float(np.percentile(inv_depth, 98))
+    # 3. Robust normalization using percentiles on INVERSE depth
+    viz_min = float(np.percentile(inv_depth, clip_low))
+    viz_max = float(np.percentile(inv_depth, clip_high))
     
-    # Clip and normalize
+    # Clip and normalize to [0, 1]
     inv_depth_clipped = np.clip(inv_depth, viz_min, viz_max)
     norm_depth = (inv_depth_clipped - viz_min) / (viz_max - viz_min + 1e-8)
+    
+    # 4. Apply histogram equalization for better tonal distribution
+    if use_hist_eq:
+        norm_depth = apply_histogram_equalization(norm_depth, clip_limit=hist_clip_limit)
+    
+    # 5. Apply gamma correction to fine-tune midtone response
+    if gamma != 1.0:
+        norm_depth = apply_gamma_correction(norm_depth, gamma)
     
     # Create 8-bit grayscale PNG
     png = Image.fromarray((norm_depth * 255).astype(np.uint8), mode="L")
@@ -348,8 +420,9 @@ def run_inference(job):
     depth_max = float(depth.max())
 
     logger.info(
-        "job=%s saved=%s head=%s res=%s depth_range=%.2fm-%.2fm",
-        job_id, png_path, head_type, original_size, depth_min, depth_max
+        "job=%s saved=%s head=%s res=%s depth_range=%.2fm-%.2fm hist_eq=%s gamma=%.2f",
+        job_id, png_path, head_type, original_size, depth_min, depth_max,
+        use_hist_eq, gamma
     )
 
     return {
